@@ -13,7 +13,7 @@ import cma
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.updated_model_4 import GPTConfig, GPT
+from model.updated_model_5 import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # Arguments
@@ -29,7 +29,6 @@ parser.add_argument('--is_sorted', type=str, default="True")
 parser.add_argument('--num_list_copies', type=int, default=5)
 parser.add_argument('--use_identity_embeddings', type=bool, default=False)
 parser.add_argument('--use_fixed_positions', type=bool, default=False)
-parser.add_argument('--use_identity_output_projection', type=bool, default=False)
 parser.add_argument('--use_identity_V', type=bool, default=False)
 parser.add_argument('--fixed_length', type=int, default=None)
 parser.add_argument('--permutation_type', type=str, default="reversal")
@@ -90,7 +89,6 @@ model_args = dict(
     dropout=0.0,  # No dropout for CMA-ES
     use_identity_embeddings=args.use_identity_embeddings,
     use_fixed_positions=args.use_fixed_positions,
-    use_identity_output_projection=args.use_identity_output_projection,
     use_identity_V=args.use_identity_V
 )
 
