@@ -19,4 +19,7 @@ __pycache__/
 # Ignore files with access tokens
 helpful/upload_to_huggingface.py
 
+# Simulation files
+simulation/
+
 

@@ -19,6 +19,7 @@ import torch
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import seaborn as sns
 
 # Add parent directory to path
@@ -149,46 +150,255 @@ def load_model(checkpoint_path, device='cpu'):
     return model, gptconf
 
 
-def visualize_attention(model, input_tokens, token_labels, heads, layers, config, save_path=None):
-    """Visualize attention patterns"""
+def visualize_attention(model, input_tokens, token_labels, heads, layers, config, save_path=None, show_average=False, focus_q_token="?", scale=1.0, max_cols=4):
+    """Visualize attention patterns.
+    
+    If token_labels contains tokens after '?', the last token is treated as the
+    correct answer. The model only receives tokens up to '?', attention rows are
+    cropped to '?', and the answer is shown highlighted in green in the title.
+    """
+    import math
+    import matplotlib.patches as patches
+    
     device = next(model.parameters()).device
+    
+    # Detect answer token: if there are tokens after '?', the last one is the answer
+    correct_answer = None
+    display_labels = list(token_labels)  # full sequence for the title
+    if focus_q_token in token_labels:
+        q_pos = token_labels.index(focus_q_token)
+        if q_pos < len(token_labels) - 1:
+            # There are tokens after '?' — last token is the answer
+            correct_answer = token_labels[-1]
+            # Crop input to only up to and including '?'
+            token_labels = token_labels[:q_pos + 1]
+            input_tokens = input_tokens[:q_pos + 1]
+    
     input_tensor = torch.tensor([input_tokens], dtype=torch.long).to(device)
     
     with torch.no_grad():
         _, _, attention_weights = model(input_tensor, return_attn_weights=True)
     
-    # Create subplots: rows = layers, cols = heads
-    n_layers = len(layers)
-    n_heads = len(heads)
-    fig, axes = plt.subplots(n_layers, n_heads, figsize=(6*n_heads, 5*n_layers), squeeze=False)
+    plot_items = []
     
-    for row, layer_idx in enumerate(layers):
+    for layer_idx in layers:
         if layer_idx >= len(attention_weights):
-            print(f"Warning: Layer {layer_idx} doesn't exist, skipping")
             continue
             
         layer_weights = attention_weights[layer_idx]
         
-        for col, head_idx in enumerate(heads):
+        for head_idx in heads:
             if head_idx >= layer_weights.shape[1]:
-                print(f"Warning: Head {head_idx} doesn't exist, skipping")
                 continue
-            
-            ax = axes[row, col]
             attn_matrix = layer_weights[0, head_idx].cpu().numpy()
+            title = f'Layer {layer_idx}, Head {head_idx}'
+            plot_items.append((attn_matrix, title))
             
-            sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True, 
-                       annot=False, ax=ax, vmin=0, vmax=1)
+        if show_average:
+            avg_matrix = layer_weights[0, heads].mean(dim=0).cpu().numpy()
+            title = f'Layer {layer_idx}, Average of Heads'
+            plot_items.append((avg_matrix, title))
             
-            ax.set_title(f'Layer {layer_idx}, Head {head_idx}', fontsize=12)
-            ax.set_xticks(np.arange(len(token_labels)) + 0.5)
-            ax.set_yticks(np.arange(len(token_labels)) + 0.5)
-            ax.set_xticklabels(token_labels, rotation=45, ha='right', fontsize=9)
-            ax.set_yticklabels(token_labels, fontsize=9)
-            ax.set_xlabel('Key (attending to)', fontsize=10)
-            ax.set_ylabel('Query (from)', fontsize=10)
+    total_plots = len(plot_items)
+    if total_plots == 0:
+        print("No valid attention heads to visualize.")
+        return
+        
+    n_cols = min(max_cols, total_plots)
+    n_rows = math.ceil(total_plots / n_cols)
     
-    plt.suptitle(f'Attention Patterns\nInput: {" ".join(token_labels)}', fontsize=14, y=1.02)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols*scale, 5*n_rows*scale), squeeze=False)
+    axes_flat = axes.flatten()
+    
+    for idx, (attn_matrix, title) in enumerate(plot_items):
+        ax = axes_flat[idx]
+        sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True, 
+                   annot=False, ax=ax, vmin=0, vmax=1)
+        ax.set_title(title, fontsize=12, fontweight='bold' if 'Average' in title else 'normal')
+        
+        ax.set_xticks(np.arange(len(token_labels)) + 0.5)
+        ax.set_yticks(np.arange(len(token_labels)) + 0.5)
+        ax.set_xticklabels(token_labels, rotation=45, ha='right', fontsize=9)
+        ax.set_yticklabels(token_labels, fontsize=9)
+        ax.set_xlabel('Key (attending to)', fontsize=10)
+        ax.set_ylabel('Query', fontsize=10)
+        
+        if focus_q_token in token_labels:
+            try:
+                q_idx = token_labels.index(focus_q_token)
+                if q_idx > 0:
+                    rect = patches.Rectangle((0, 0), len(token_labels), q_idx, 
+                                             linewidth=0, edgecolor='none', facecolor='white', alpha=0.6)
+                    ax.add_patch(rect)
+                
+                # Mark the highest attended token between the first two tokens (u and v)
+                if len(token_labels) > 1:
+                    c_indices = [0, 1]
+                    vals = [attn_matrix[q_idx, c] for c in c_indices]
+                    highest_c_idx = 0 if vals[0] >= vals[1] else 1
+                    predicted_token = token_labels[highest_c_idx]
+                    
+                    # Color star green if matches correct answer, red if not, white if no answer given
+                    if correct_answer is not None:
+                        star_color = "lime" if predicted_token == correct_answer else "red"
+                    else:
+                        star_color = "white"
+                    ax.text(highest_c_idx + 0.5, q_idx + 0.5, "*", ha="center", va="center", 
+                            color=star_color, fontweight="bold", fontsize=20)
+            except ValueError:
+                pass
+                
+    # Hide any unused subplots
+    for idx in range(total_plots, n_rows * n_cols):
+        axes_flat[idx].axis('off')
+    
+    # Build title with answer highlighted in green
+    if correct_answer is not None:
+        # Use fig.text for colored answer
+        base_text = "Attention Patterns\nInput: " + " ".join(token_labels) + " "
+        fig.text(0.5, 1.03, base_text, ha='center', fontsize=14, transform=fig.transFigure)
+        # Add the answer token in green right after
+        fig.text(0.5 + len(base_text) * 0.003, 1.03, correct_answer, ha='left', fontsize=14, 
+                 color='green', fontweight='bold', transform=fig.transFigure)
+    else:
+        plt.suptitle(f'Attention Patterns\nInput: {" ".join(token_labels)}', fontsize=14, y=1.02)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved to {save_path}")
+    else:
+        plt.show()
+    
+    plt.close()
+
+
+def visualize_attention_batch(model, input_text_block, stoi, heads, layers, config, 
+                               save_path=None, scale=1.0, max_cols=2, 
+                               focus_q_token="?"):
+    """
+    Visualize average attention for multiple sequences.
+    
+    Args:
+        model: The trained model
+        input_text_block: Multi-line string where each line is a sequence like "u v h t 0 ? u"
+                          The last token is the correct answer.
+                          Model input is everything up to and including '?'.
+        stoi: String-to-index vocabulary mapping
+        heads: List of head indices to average over
+        layers: List of layer indices to visualize
+        config: Model config
+        save_path: Optional path to save the figure
+        scale: Plot scaling factor
+        max_cols: Maximum number of columns in the grid
+        focus_q_token: The query token to focus on (default '?')
+    """
+    import math
+    import matplotlib.patches as mpatches
+    
+    device = next(model.parameters()).device
+    
+    # Parse input lines
+    lines = [line.strip() for line in input_text_block.strip().split('\n') if line.strip()]
+    
+    plot_items = []  # Each item: (avg_attn_matrix, input_labels, correct_answer, title)
+    
+    for line in lines:
+        tokens = line.split()
+        
+        # Last token is the correct answer
+        correct_answer = tokens[-1]
+        
+        # Model input is everything up to and including '?'
+        if focus_q_token in tokens:
+            q_pos = tokens.index(focus_q_token)
+            input_tokens_str = tokens[:q_pos + 1]  # up to and including '?'
+        else:
+            print(f"Warning: '{focus_q_token}' not found in '{line}', skipping")
+            continue
+        
+        # Encode tokens
+        try:
+            input_ids = [stoi[t] for t in input_tokens_str]
+        except KeyError as e:
+            print(f"Skipping '{line}': token {e} not in vocabulary")
+            continue
+        
+        input_tensor = torch.tensor([input_ids], dtype=torch.long).to(device)
+        
+        with torch.no_grad():
+            _, _, attention_weights = model(input_tensor, return_attn_weights=True)
+        
+        # Compute average attention across heads for each layer
+        for layer_idx in layers:
+            if layer_idx >= len(attention_weights):
+                continue
+            layer_weights = attention_weights[layer_idx]
+            
+            # Average across all specified heads
+            valid_heads = [h for h in heads if h < layer_weights.shape[1]]
+            if not valid_heads:
+                continue
+            avg_matrix = layer_weights[0, valid_heads].mean(dim=0).cpu().numpy()
+            
+            # Crop to only show rows up to and including '?' 
+            # (q_pos is the index of '?' in input_tokens_str, which is the last token)
+            cropped_matrix = avg_matrix[:q_pos + 1, :q_pos + 1]
+            
+            title = ' '.join(tokens)
+            plot_items.append((cropped_matrix, input_tokens_str, correct_answer, title))
+    
+    total_plots = len(plot_items)
+    if total_plots == 0:
+        print("No valid sequences to visualize.")
+        return
+    
+    n_cols = min(max_cols, total_plots)
+    n_rows = math.ceil(total_plots / n_cols)
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols*scale, 5*n_rows*scale), squeeze=False)
+    axes_flat = axes.flatten()
+    
+    for idx, (attn_matrix, token_labels, correct_answer, title) in enumerate(plot_items):
+        ax = axes_flat[idx]
+        
+        sns.heatmap(attn_matrix, cmap="viridis", cbar=True, square=True,
+                   annot=False, ax=ax, vmin=0, vmax=1)
+        ax.set_title(title, fontsize=11, fontweight='bold')
+        
+        ax.set_xticks(np.arange(len(token_labels)) + 0.5)
+        ax.set_yticks(np.arange(len(token_labels)) + 0.5)
+        ax.set_xticklabels(token_labels, rotation=45, ha='right', fontsize=9)
+        ax.set_yticklabels(token_labels, fontsize=9)
+        ax.set_xlabel('Key (attending to)', fontsize=10)
+        ax.set_ylabel('Query', fontsize=10)
+        
+        # Find the '?' row index (last row in the cropped matrix)
+        q_idx = len(token_labels) - 1  # '?' is always the last row in cropped matrix
+        
+        # Grey out all rows before '?'
+        if q_idx > 0:
+            rect = mpatches.Rectangle((0, 0), len(token_labels), q_idx,
+                                       linewidth=0, edgecolor='none', facecolor='white', alpha=0.6)
+            ax.add_patch(rect)
+        
+        # Star on the highest-attended of the first two tokens
+        if len(token_labels) > 1:
+            vals = [attn_matrix[q_idx, 0], attn_matrix[q_idx, 1]]
+            highest_c_idx = 0 if vals[0] >= vals[1] else 1
+            predicted_token = token_labels[highest_c_idx]
+            
+            # Green if prediction matches correct answer, red if not
+            star_color = "lime" if predicted_token == correct_answer else "red"
+            ax.text(highest_c_idx + 0.5, q_idx + 0.5, "*", ha="center", va="center",
+                    color=star_color, fontweight="bold", fontsize=20)
+    
+    # Hide unused subplots
+    for idx in range(total_plots, n_rows * n_cols):
+        axes_flat[idx].axis('off')
+    
+    plt.suptitle(f'Average Attention (across {len(heads)} heads)', fontsize=14, y=1.02)
     plt.tight_layout()
     
     if save_path:
