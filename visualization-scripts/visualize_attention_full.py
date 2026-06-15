@@ -178,14 +178,34 @@ def load_model(checkpoint_path, device='cpu'):
 
 
 def visualize_attention(model, input_tokens, token_labels, heads, layers, config, save_path=None, show_average=False, focus_q_token="?", scale=1.0, max_cols=4):
-    """Visualize attention patterns"""
+    """Visualize attention patterns.
+    
+    If token_labels contains tokens after '?', the last token is treated as the
+    correct answer. The model only receives tokens up to '?', attention rows are
+    cropped to '?', and the answer is shown highlighted in green in the title.
+    """
+    import math
+    import matplotlib.patches as patches
+    
     device = next(model.parameters()).device
+    
+    # Detect answer token: if there are tokens after '?', the last one is the answer
+    correct_answer = None
+    display_labels = list(token_labels)  # full sequence for the title
+    if focus_q_token in token_labels:
+        q_pos = token_labels.index(focus_q_token)
+        if q_pos < len(token_labels) - 1:
+            # There are tokens after '?' — last token is the answer
+            correct_answer = token_labels[-1]
+            # Crop input to only up to and including '?'
+            token_labels = token_labels[:q_pos + 1]
+            input_tokens = input_tokens[:q_pos + 1]
+    
     input_tensor = torch.tensor([input_tokens], dtype=torch.long).to(device)
     
     with torch.no_grad():
         _, _, attention_weights = model(input_tensor, return_attn_weights=True)
     
-    import math
     plot_items = []
     
     for layer_idx in layers:
@@ -234,7 +254,6 @@ def visualize_attention(model, input_tokens, token_labels, heads, layers, config
             try:
                 q_idx = token_labels.index(focus_q_token)
                 if q_idx > 0:
-                    import matplotlib.patches as patches
                     rect = patches.Rectangle((0, 0), len(token_labels), q_idx, 
                                              linewidth=0, edgecolor='none', facecolor='white', alpha=0.6)
                     ax.add_patch(rect)
@@ -244,16 +263,33 @@ def visualize_attention(model, input_tokens, token_labels, heads, layers, config
                     c_indices = [0, 1]
                     vals = [attn_matrix[q_idx, c] for c in c_indices]
                     highest_c_idx = 0 if vals[0] >= vals[1] else 1
+                    predicted_token = token_labels[highest_c_idx]
+                    
+                    # Color star green if matches correct answer, red if not, white if no answer given
+                    if correct_answer is not None:
+                        star_color = "lime" if predicted_token == correct_answer else "red"
+                    else:
+                        star_color = "white"
                     ax.text(highest_c_idx + 0.5, q_idx + 0.5, "*", ha="center", va="center", 
-                            color="white", fontweight="bold", fontsize=20)
+                            color=star_color, fontweight="bold", fontsize=20)
             except ValueError:
                 pass
                 
     # Hide any unused subplots
     for idx in range(total_plots, n_rows * n_cols):
         axes_flat[idx].axis('off')
-        
-    plt.suptitle(f'Attention Patterns\nInput: {" ".join(token_labels)}', fontsize=14, y=1.02)
+    
+    # Build title with answer highlighted in green
+    if correct_answer is not None:
+        # Use fig.text for colored answer
+        base_text = "Attention Patterns\nInput: " + " ".join(token_labels) + " "
+        fig.text(0.5, 1.03, base_text, ha='center', fontsize=14, transform=fig.transFigure)
+        # Add the answer token in green right after
+        fig.text(0.5 + len(base_text) * 0.003, 1.03, correct_answer, ha='left', fontsize=14, 
+                 color='green', fontweight='bold', transform=fig.transFigure)
+    else:
+        plt.suptitle(f'Attention Patterns\nInput: {" ".join(token_labels)}', fontsize=14, y=1.02)
+    
     plt.tight_layout()
     
     if save_path:
