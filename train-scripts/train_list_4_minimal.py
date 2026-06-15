@@ -41,6 +41,8 @@ parser.add_argument('--train_batch_size', type=int, default=256, help='Training 
 parser.add_argument('--learning_rate', type=float, default=5e-2, help='Max learning rate (default: 5e-2)')
 parser.add_argument('--dropout', type=float, default=0.0, help='Dropout rate (default: 0.0)')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay (default: 0.0)')
+parser.add_argument('--compile', type=str, default="True", help='torch.compile the model (default: True). Set False for tiny models.')
+parser.add_argument('--eval_iters', type=int, default=None, help='Forward passes per eval (default: max_iters//10).')
 args = parser.parse_args()
 
 dataset = args.dataset
@@ -129,7 +131,7 @@ out_dir = f'out/{dataset}_{list_type}_{length_type}_{permutation_type}_{config}_
 # I/O
 eval_interval = max_iters // 10
 log_interval = max_iters // 100
-eval_iters = max_iters // 10
+eval_iters = args.eval_iters if args.eval_iters is not None else max_iters // 10
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
@@ -159,7 +161,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
+compile = (args.compile == "True") # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 # Use values from args
 learning_rate = args.learning_rate
